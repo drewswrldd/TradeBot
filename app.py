@@ -10,7 +10,12 @@ from flask import Flask, request, jsonify
 from apscheduler.schedulers.background import BackgroundScheduler
 import pytz
 
-from config import WEBHOOK_SECRET, INSTRUMENT
+from config import (
+    WEBHOOK_SECRET,
+    INSTRUMENT,
+    TRADOVATE_USERNAME,
+    TRADOVATE_PASSWORD,
+)
 from tradovate.client import TradovateClient
 from tradovate.websocket import TradovateWebSocket
 from rules.mffu_rules import MFFURulesEngine
@@ -50,13 +55,19 @@ def bootstrap():
 
     logger.info("=== ATS Trading Agent starting up ===")
 
-    # Authenticate with Tradovate
-    tv_client.authenticate()
+    # Authenticate with Tradovate (only if credentials are configured)
+    if TRADOVATE_USERNAME and TRADOVATE_PASSWORD:
+        tv_client.authenticate()
 
-    # Sync initial account state
-    summary = tv_client.get_account_summary()
-    rules_engine.sync_from_tradovate(summary)
-    logger.info(f"Account state synced: {rules_engine.status()}")
+        # Sync initial account state
+        summary = tv_client.get_account_summary()
+        rules_engine.sync_from_tradovate(summary)
+        logger.info(f"Account state synced: {rules_engine.status()}")
+    else:
+        logger.warning(
+            "Tradovate credentials not configured — skipping authentication. "
+            "Set TRADOVATE_USERNAME and TRADOVATE_PASSWORD to enable trading."
+        )
 
     # Refresh news calendar
     news_calendar.refresh()
@@ -78,20 +89,22 @@ def bootstrap():
         position_monitor=position_monitor,
     )
 
-    # Connect WebSocket for live price data
-    ws_client = TradovateWebSocket(
-        access_token=tv_client.access_token,
-        on_tick=_on_tick,
-        on_bar=_on_bar,
-    )
-    ws_client.connect()
-    ws_client.subscribe_quotes(INSTRUMENT)
+    # Connect WebSocket for live price data (only if authenticated)
+    if TRADOVATE_USERNAME and TRADOVATE_PASSWORD:
+        ws_client = TradovateWebSocket(
+            access_token=tv_client.access_token,
+            on_tick=_on_tick,
+            on_bar=_on_bar,
+        )
+        ws_client.connect()
+        ws_client.subscribe_quotes(INSTRUMENT)
 
     # Scheduler: refresh news calendar daily, sync account hourly
     scheduler = BackgroundScheduler(timezone=pytz.utc)
     scheduler.add_job(news_calendar.refresh,             "cron", hour=0, minute=5)
-    scheduler.add_job(_sync_account,                     "interval", minutes=15)
-    scheduler.add_job(tv_client.refresh_if_needed,       "interval", minutes=10)
+    if TRADOVATE_USERNAME and TRADOVATE_PASSWORD:
+        scheduler.add_job(_sync_account,                 "interval", minutes=15)
+        scheduler.add_job(tv_client.refresh_if_needed,   "interval", minutes=10)
     scheduler.start()
 
     logger.info("=== ATS Trading Agent ready ===")
