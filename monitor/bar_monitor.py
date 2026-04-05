@@ -21,7 +21,7 @@ class PendingSignal:
     direction:     str      # 'long' | 'short'
     trigger_high:  float    # high of the bar that caused ATS color change
     trigger_low:   float    # low  of the bar that caused ATS color change
-    swing_extreme: float    # swing low (long) or swing high (short) for stop
+    atr:           float    # ATR value for calculating stop distance
     ats_bar_time:  str      # ISO timestamp of the trigger bar
     received_at:   datetime = field(default_factory=datetime.utcnow)
     confirmed:     bool     = False
@@ -30,10 +30,6 @@ class PendingSignal:
     def entry_trigger_price(self) -> float:
         """Price that must be exceeded to confirm entry."""
         return self.trigger_high if self.direction == "long" else self.trigger_low
-
-    @property
-    def stop_price(self) -> float:
-        return self.swing_extreme
 
 
 class BarConfirmationMonitor:
@@ -64,7 +60,7 @@ class BarConfirmationMonitor:
         logger.info(
             f"Pending signal set: {signal.direction.upper()} | "
             f"Entry trigger: {signal.entry_trigger_price} | "
-            f"Stop: {signal.stop_price}"
+            f"ATR: {signal.atr}"
         )
 
     def clear(self):
@@ -125,7 +121,7 @@ class BarConfirmationMonitor:
             "pending":       True,
             "direction":     s.direction,
             "trigger_price": s.entry_trigger_price,
-            "stop_price":    s.stop_price,
+            "atr":           s.atr,
             "last_tick":     self._last_tick,
             "gap_to_entry":  round(abs(self._last_tick - s.entry_trigger_price), 2),
             "received_at":   s.received_at.isoformat(),

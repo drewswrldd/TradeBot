@@ -9,7 +9,7 @@ import json
 import logging
 import anthropic
 from config import ANTHROPIC_API_KEY, INSTRUMENT, MES_POINT_VALUE
-from rules.risk import calculate_position_size, calculate_targets, round_to_tick
+from rules.risk import calculate_position_size, calculate_targets, round_to_tick, calculate_atr_stop
 from monitor.bar_monitor import PendingSignal
 from monitor.position_monitor import OpenTrade
 
@@ -27,7 +27,7 @@ Your job when called:
 
 Strategy 1 rules you enforce:
 - Entry: ATS color change confirmed when next bar overtakes trigger bar high (long) / low (short)
-- Stop: at the last swing low (long) or swing high (short) before the color change
+- Stop: 1.5 × ATR from entry price (below for longs, above for shorts)
 - Exit 1: close 50% of position at 2R profit
 - Exit 2: close remaining 50% when ATS turns the opposite color
 
@@ -85,13 +85,21 @@ class ATSAgent:
         Called when bar confirmation fires.
         Runs the agent decision loop and executes or rejects the trade.
         """
+        # Calculate ATR-based stop price
+        stop_price = calculate_atr_stop(
+            entry_price = entry_price,
+            atr         = signal.atr,
+            direction   = signal.direction,
+            multiplier  = 1.5,
+        )
+
         # Pre-calculate sizing for the agent to reason over
         sizing = calculate_position_size(
             entry_price    = entry_price,
-            stop_price     = signal.stop_price,
+            stop_price     = stop_price,
             account_balance = self.rules_engine.state.current_balance,
         )
-        targets = calculate_targets(entry_price, signal.stop_price, signal.direction)
+        targets = calculate_targets(entry_price, stop_price, signal.direction)
         rules_status = self.rules_engine.status()
 
         # Pre-check the rules engine before even calling the agent
@@ -113,7 +121,8 @@ SIGNAL:
 - Entry price: {entry_price}
 - Trigger bar high: {signal.trigger_high}
 - Trigger bar low: {signal.trigger_low}
-- Stop price (swing extreme): {signal.stop_price}
+- ATR: {signal.atr}
+- Stop price (1.5 × ATR): {stop_price}
 - ATS bar time: {signal.ats_bar_time}
 
 SIZING (pre-calculated):

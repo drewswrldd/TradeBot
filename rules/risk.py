@@ -82,3 +82,36 @@ def calculate_targets(entry_price: float,
 def round_to_tick(price: float) -> float:
     """Round a price to the nearest MES tick (0.25)."""
     return round(round(price / MES_TICK_SIZE) * MES_TICK_SIZE, 4)
+
+
+def calculate_atr_stop(entry_price: float, atr: float, direction: str,
+                        multiplier: float = 1.5) -> float:
+    """
+    Calculate stop price based on ATR.
+
+    Args:
+        entry_price: The entry price
+        atr: Average True Range value
+        direction: 'long' or 'short'
+        multiplier: ATR multiplier (default 1.5)
+
+    Returns:
+        Stop price rounded to nearest MES tick (0.25)
+    """
+    stop_distance = atr * multiplier
+
+    if direction == "long":
+        stop_price = entry_price - stop_distance
+    else:  # short
+        stop_price = entry_price + stop_distance
+
+    stop_price = round_to_tick(stop_price)
+
+    logger.info(
+        f"ATR stop calculated: {direction.upper()} | "
+        f"Entry: {entry_price} | ATR: {atr} | "
+        f"Stop distance: {stop_distance:.2f} ({multiplier}x ATR) | "
+        f"Stop: {stop_price}"
+    )
+
+    return stop_price

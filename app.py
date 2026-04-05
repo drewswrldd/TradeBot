@@ -176,7 +176,7 @@ def ats_webhook():
         "color":        "blue" | "red",
         "trigger_high": 5284.50,
         "trigger_low":  5271.25,
-        "swing_extreme": 5265.00,   // swing low for longs, swing high for shorts
+        "atr":          12.50,      // ATR value for stop calculation
         "bar_time":     "2025-04-05T14:00:00Z",
         "close_price":  5278.75     // close of the bar that caused the color change
     }
@@ -194,13 +194,13 @@ def ats_webhook():
     color        = data.get("color", "").lower()
     trigger_high = data.get("trigger_high")
     trigger_low  = data.get("trigger_low")
-    swing_extreme = data.get("swing_extreme")
+    atr          = data.get("atr")
     bar_time     = data.get("bar_time", "")
     close_price  = data.get("close_price")
 
     logger.info(
         f"ATS webhook received: {color.upper()} | {direction.upper()} | "
-        f"H:{trigger_high} L:{trigger_low} Swing:{swing_extreme}"
+        f"H:{trigger_high} L:{trigger_low} ATR:{atr}"
     )
 
     # ── If ATS reversed against open trade, notify position monitor ──
@@ -212,14 +212,14 @@ def ats_webhook():
         return jsonify({"status": "reversal_processed"}), 200
 
     # ── No open trade — queue the new signal for confirmation ──
-    if not all([trigger_high, trigger_low, swing_extreme]):
-        return jsonify({"error": "Missing required price fields"}), 400
+    if not all([trigger_high, trigger_low, atr]):
+        return jsonify({"error": "Missing required price fields (trigger_high, trigger_low, atr)"}), 400
 
     signal = PendingSignal(
         direction     = direction,
         trigger_high  = float(trigger_high),
         trigger_low   = float(trigger_low),
-        swing_extreme = float(swing_extreme),
+        atr           = float(atr),
         ats_bar_time  = bar_time,
     )
 
@@ -230,7 +230,7 @@ def ats_webhook():
         "status":        "signal_queued",
         "direction":     direction,
         "entry_trigger": signal.entry_trigger_price,
-        "stop":          signal.stop_price,
+        "atr":           signal.atr,
     }), 200
 
 
