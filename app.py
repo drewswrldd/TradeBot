@@ -466,7 +466,7 @@ DASHBOARD_HTML = """
                     <span class="stat-value">{{ account.pct_to_target }}%</span>
                 </div>
                 <div class="progress-bar">
-                    <div class="progress-fill green" style="width: {{ min(account.pct_to_target, 100) }}%"></div>
+                    <div class="progress-fill green" style="width: {{ [account.pct_to_target, 100]|min }}%"></div>
                 </div>
             </div>
 
