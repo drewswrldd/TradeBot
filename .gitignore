@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+venv/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Claude Code
+.claude/
+
+# Logs
+logs/*.log
+
+# Data (keep structure, ignore db files)
+data/*.db
+!data/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db

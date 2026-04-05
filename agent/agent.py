@@ -80,11 +80,18 @@ class ATSAgent:
 
     # ── Main entry point ───────────────────────────────────
 
-    def execute_entry(self, signal: PendingSignal, entry_price: float):
+    def execute_entry(self, signal: PendingSignal, entry_price: float, on_trade_opened=None):
         """
         Called when bar confirmation fires.
         Runs the agent decision loop and executes or rejects the trade.
+
+        Args:
+            signal: The pending signal that was confirmed
+            entry_price: The price at which entry is triggered
+            on_trade_opened: Optional callback(direction, entry_price, stop_price, atr, contracts, target_2r)
+                            Called when a trade is successfully opened.
         """
+        self._on_trade_opened = on_trade_opened
         # Calculate ATR-based stop price
         stop_price = calculate_atr_stop(
             entry_price = entry_price,
@@ -154,12 +161,12 @@ Instrument: {INSTRUMENT}
             messages   = messages,
         )
 
-        self._handle_response(response, signal, entry_price, sizing)
+        self._handle_response(response, signal, entry_price, sizing, targets)
 
     # ── Response handler ───────────────────────────────────
 
     def _handle_response(self, response, signal: PendingSignal,
-                          entry_price: float, sizing: dict):
+                          entry_price: float, sizing: dict, targets: dict):
         for block in response.content:
             if block.type == "tool_use":
                 tool  = block.name
@@ -167,7 +174,7 @@ Instrument: {INSTRUMENT}
 
                 if tool == "place_entry_order":
                     logger.info(f"Agent decision: PLACE ORDER | {inp['reasoning']}")
-                    self._execute_order(inp, signal, entry_price, sizing)
+                    self._execute_order(inp, signal, entry_price, sizing, targets)
 
                 elif tool == "reject_trade":
                     logger.info(f"Agent decision: REJECT | {inp['reason']}")
@@ -178,7 +185,7 @@ Instrument: {INSTRUMENT}
     # ── Order execution ────────────────────────────────────
 
     def _execute_order(self, order_params: dict, signal: PendingSignal,
-                        entry_price: float, sizing: dict):
+                        entry_price: float, sizing: dict, targets: dict):
         action    = order_params["action"]
         contracts = order_params["contracts"]
         stop      = round_to_tick(order_params["stop_price"])
@@ -201,6 +208,17 @@ Instrument: {INSTRUMENT}
                 entry_order_id  = result.get("orderId"),
             )
             self.position_monitor.open_trade(trade)
+
+            # Call trade logging callback if provided
+            if self._on_trade_opened:
+                self._on_trade_opened(
+                    direction=signal.direction,
+                    entry_price=entry_price,
+                    stop_price=stop,
+                    atr=signal.atr,
+                    contracts=contracts,
+                    target_2r=targets['target_2r'],
+                )
 
         except Exception as e:
             logger.error(f"Order placement failed: {e}", exc_info=True)
