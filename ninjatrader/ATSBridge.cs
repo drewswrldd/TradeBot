@@ -22,20 +22,20 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
-using System.Threading.Tasks;
+using System.Windows;
 using System.Xml.Serialization;
 using NinjaTrader.Cbi;
 using NinjaTrader.Core;
 using NinjaTrader.Gui;
 using NinjaTrader.Gui.Tools;
 using NinjaTrader.NinjaScript;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 #endregion
 
 namespace NinjaTrader.NinjaScript.AddOns
@@ -52,6 +52,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private bool _running;
         private Account _account;
         private readonly object _lock = new object();
+        private bool _started = false;
 
         // ── Lifecycle ───────────────────────────────────────────────────────
 
@@ -70,19 +71,21 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         protected override void OnWindowCreated(Window window)
         {
-            // Start the HTTP listener when NinjaTrader is ready
-            if (_listener == null)
+            // Start the HTTP listener when NinjaTrader is ready (only once)
+            if (!_started)
             {
+                _started = true;
                 StartHttpListener();
             }
         }
 
         protected override void OnWindowDestroyed(Window window)
         {
-            // Stop when the last window closes
-            if (Core.Globals.AllWindows.Count == 0)
+            // Stop when all windows close
+            if (Globals.AllWindows.Count == 0)
             {
                 StopHttpListener();
+                _started = false;
             }
         }
 
@@ -104,14 +107,14 @@ namespace NinjaTrader.NinjaScript.AddOns
                 };
                 _listenerThread.Start();
 
-                Log($"ATSBridge HTTP listener started on {LISTEN_PREFIX}", LogLevel.Information);
+                LogMessage("ATSBridge HTTP listener started on " + LISTEN_PREFIX);
 
                 // Connect to the target account
                 ConnectAccount();
             }
             catch (Exception ex)
             {
-                Log($"Failed to start HTTP listener: {ex.Message}", LogLevel.Error);
+                LogMessage("Failed to start HTTP listener: " + ex.Message);
             }
         }
 
@@ -121,12 +124,16 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             if (_listener != null)
             {
-                _listener.Stop();
-                _listener.Close();
+                try
+                {
+                    _listener.Stop();
+                    _listener.Close();
+                }
+                catch { }
                 _listener = null;
             }
 
-            Log("ATSBridge HTTP listener stopped", LogLevel.Information);
+            LogMessage("ATSBridge HTTP listener stopped");
         }
 
         private void ListenLoop()
@@ -136,7 +143,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 try
                 {
                     var context = _listener.GetContext();
-                    Task.Run(() => HandleRequest(context));
+                    ThreadPool.QueueUserWorkItem(state => HandleRequest((HttpListenerContext)state), context);
                 }
                 catch (HttpListenerException)
                 {
@@ -145,7 +152,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
                 catch (Exception ex)
                 {
-                    Log($"Listener error: {ex.Message}", LogLevel.Error);
+                    if (_running)
+                        LogMessage("Listener error: " + ex.Message);
                 }
             }
         }
@@ -165,7 +173,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string path = request.Url.AbsolutePath.ToLower();
                 string method = request.HttpMethod.ToUpper();
 
-                Log($"Request: {method} {path}", LogLevel.Information);
+                LogMessage("Request: " + method + " " + path);
 
                 if (path == "/order" && method == "POST")
                 {
@@ -181,28 +189,32 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
                 else if (path == "/health" && method == "GET")
                 {
-                    responseJson = JsonConvert.SerializeObject(new { status = "ok", timestamp = DateTime.UtcNow });
+                    responseJson = "{\"status\":\"ok\",\"timestamp\":\"" + DateTime.UtcNow.ToString("o") + "\"}";
                 }
                 else
                 {
                     statusCode = 404;
-                    responseJson = JsonConvert.SerializeObject(new { error = "Not found" });
+                    responseJson = "{\"error\":\"Not found\"}";
                 }
             }
             catch (Exception ex)
             {
                 statusCode = 500;
-                responseJson = JsonConvert.SerializeObject(new { error = ex.Message });
-                Log($"Request error: {ex.Message}", LogLevel.Error);
+                responseJson = "{\"error\":\"" + EscapeJsonString(ex.Message) + "\"}";
+                LogMessage("Request error: " + ex.Message);
             }
 
             // Send response
-            byte[] buffer = Encoding.UTF8.GetBytes(responseJson);
-            response.StatusCode = statusCode;
-            response.ContentType = "application/json";
-            response.ContentLength64 = buffer.Length;
-            response.OutputStream.Write(buffer, 0, buffer.Length);
-            response.OutputStream.Close();
+            try
+            {
+                byte[] buffer = Encoding.UTF8.GetBytes(responseJson);
+                response.StatusCode = statusCode;
+                response.ContentType = "application/json";
+                response.ContentLength64 = buffer.Length;
+                response.OutputStream.Write(buffer, 0, buffer.Length);
+                response.OutputStream.Close();
+            }
+            catch { }
         }
 
         // ── Account Connection ──────────────────────────────────────────────
@@ -217,7 +229,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (acct.Name == TARGET_ACCOUNT)
                     {
                         _account = acct;
-                        Log($"Connected to account: {_account.Name}", LogLevel.Information);
+                        LogMessage("Connected to account: " + _account.Name);
                         return;
                     }
                 }
@@ -225,10 +237,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // If exact match not found, try partial match
                 foreach (Account acct in Account.All)
                 {
-                    if (acct.Name.Contains("MFFU") || acct.Connection.Options.Name.Contains("MyFundedFutures"))
+                    if (acct.Name.Contains("MFFU"))
                     {
                         _account = acct;
-                        Log($"Connected to account (partial match): {_account.Name}", LogLevel.Information);
+                        LogMessage("Connected to account (partial match): " + _account.Name);
                         return;
                     }
                 }
@@ -237,11 +249,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (Account.All.Count > 0)
                 {
                     _account = Account.All[0];
-                    Log($"Warning: Using fallback account: {_account.Name}", LogLevel.Warning);
+                    LogMessage("Warning: Using fallback account: " + _account.Name);
                 }
                 else
                 {
-                    Log("No accounts available!", LogLevel.Error);
+                    LogMessage("No accounts available!");
                 }
             }
         }
@@ -250,12 +262,43 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             lock (_lock)
             {
-                if (_account == null || _account.Connection == null || _account.Connection.Status != ConnectionStatus.Connected)
+                if (_account == null || _account.Connection == null ||
+                    _account.Connection.Status != ConnectionStatus.Connected)
                 {
                     ConnectAccount();
                 }
                 return _account;
             }
+        }
+
+        // ── Simple JSON Parser ──────────────────────────────────────────────
+
+        private string GetJsonStringValue(string json, string key)
+        {
+            // Match "key": "value" or "key":"value"
+            string pattern = "\"" + Regex.Escape(key) + "\"\\s*:\\s*\"([^\"]*)\"";
+            Match match = Regex.Match(json, pattern);
+            return match.Success ? match.Groups[1].Value : null;
+        }
+
+        private int? GetJsonIntValue(string json, string key)
+        {
+            // Match "key": 123 or "key":123
+            string pattern = "\"" + Regex.Escape(key) + "\"\\s*:\\s*(-?\\d+)";
+            Match match = Regex.Match(json, pattern);
+            if (match.Success && int.TryParse(match.Groups[1].Value, out int result))
+                return result;
+            return null;
+        }
+
+        private double? GetJsonDoubleValue(string json, string key)
+        {
+            // Match "key": 123.45 or "key":123.45
+            string pattern = "\"" + Regex.Escape(key) + "\"\\s*:\\s*(-?\\d+\\.?\\d*)";
+            Match match = Regex.Match(json, pattern);
+            if (match.Success && double.TryParse(match.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double result))
+                return result;
+            return null;
         }
 
         // ── Order Handling ──────────────────────────────────────────────────
@@ -269,39 +312,30 @@ namespace NinjaTrader.NinjaScript.AddOns
                 body = reader.ReadToEnd();
             }
 
-            var json = JObject.Parse(body);
+            LogMessage("Order request body: " + body);
 
-            string action     = json["action"]?.ToString()?.ToUpper();      // BUY or SELL
-            string instrument = json["instrument"]?.ToString();              // e.g., MES 06-25
-            int    quantity   = json["quantity"]?.Value<int>() ?? 1;
-            double? stopPrice = json["stop_price"]?.Value<double>();
-            string orderType  = json["order_type"]?.ToString()?.ToLower() ?? "market";
+            string action = GetJsonStringValue(body, "action")?.ToUpper();      // BUY or SELL
+            string instrument = GetJsonStringValue(body, "instrument");          // e.g., MES 06-25
+            int quantity = GetJsonIntValue(body, "quantity") ?? 1;
+            double? stopPrice = GetJsonDoubleValue(body, "stop_price");
+            string orderType = GetJsonStringValue(body, "order_type")?.ToLower() ?? "market";
 
             if (string.IsNullOrEmpty(action) || string.IsNullOrEmpty(instrument))
             {
-                return JsonConvert.SerializeObject(new {
-                    success = false,
-                    error = "Missing required fields: action, instrument"
-                });
+                return "{\"success\":false,\"error\":\"Missing required fields: action, instrument\"}";
             }
 
             var account = GetAccount();
             if (account == null)
             {
-                return JsonConvert.SerializeObject(new {
-                    success = false,
-                    error = "No account connected"
-                });
+                return "{\"success\":false,\"error\":\"No account connected\"}";
             }
 
             // Find the instrument
             Instrument ninjaInstrument = Instrument.GetInstrument(instrument);
             if (ninjaInstrument == null)
             {
-                return JsonConvert.SerializeObject(new {
-                    success = false,
-                    error = $"Instrument not found: {instrument}"
-                });
+                return "{\"success\":false,\"error\":\"Instrument not found: " + EscapeJsonString(instrument) + "\"}";
             }
 
             // Determine order action
@@ -309,7 +343,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             try
             {
-                Order order;
+                Order order = null;
 
                 if (orderType == "market")
                 {
@@ -325,7 +359,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         0,  // stop price
                         string.Empty,
                         "ATSBridge",
-                        Core.Globals.MaxDate,
+                        DateTime.MaxValue,
                         null
                     );
                 }
@@ -343,7 +377,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         stopPrice.Value,
                         string.Empty,
                         "ATSBridge",
-                        Core.Globals.MaxDate,
+                        DateTime.MaxValue,
                         null
                     );
                 }
@@ -361,40 +395,28 @@ namespace NinjaTrader.NinjaScript.AddOns
                         0,
                         string.Empty,
                         "ATSBridge",
-                        Core.Globals.MaxDate,
+                        DateTime.MaxValue,
                         null
                     );
                 }
                 else
                 {
-                    return JsonConvert.SerializeObject(new {
-                        success = false,
-                        error = $"Invalid order_type or missing stop_price: {orderType}"
-                    });
+                    return "{\"success\":false,\"error\":\"Invalid order_type or missing stop_price: " + EscapeJsonString(orderType) + "\"}";
                 }
 
                 // Submit the order
                 account.Submit(new[] { order });
 
-                Log($"Order submitted: {action} {quantity} {instrument} @ {orderType}", LogLevel.Information);
+                LogMessage("Order submitted: " + action + " " + quantity + " " + instrument + " @ " + orderType);
 
-                return JsonConvert.SerializeObject(new {
-                    success = true,
-                    order_id = order.Id.ToString(),
-                    action = action,
-                    instrument = instrument,
-                    quantity = quantity,
-                    order_type = orderType,
-                    stop_price = stopPrice
-                });
+                return "{\"success\":true,\"order_id\":\"" + order.OrderId + "\",\"action\":\"" + action +
+                       "\",\"instrument\":\"" + EscapeJsonString(instrument) + "\",\"quantity\":" + quantity +
+                       ",\"order_type\":\"" + orderType + "\"}";
             }
             catch (Exception ex)
             {
-                Log($"Order submission failed: {ex.Message}", LogLevel.Error);
-                return JsonConvert.SerializeObject(new {
-                    success = false,
-                    error = ex.Message
-                });
+                LogMessage("Order submission failed: " + ex.Message);
+                return "{\"success\":false,\"error\":\"" + EscapeJsonString(ex.Message) + "\"}";
             }
         }
 
@@ -405,10 +427,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             var account = GetAccount();
             if (account == null)
             {
-                return JsonConvert.SerializeObject(new {
-                    success = false,
-                    error = "No account connected"
-                });
+                return "{\"success\":false,\"error\":\"No account connected\"}";
             }
 
             try
@@ -422,7 +441,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     {
                         account.Flatten(new[] { position.Instrument });
                         positionsClosed++;
-                        Log($"Flattened position: {position.Instrument.FullName}", LogLevel.Information);
+                        LogMessage("Flattened position: " + position.Instrument.FullName);
                     }
                 }
 
@@ -439,21 +458,14 @@ namespace NinjaTrader.NinjaScript.AddOns
                     }
                 }
 
-                Log($"Flatten complete: {positionsClosed} positions, {ordersCancelled} orders cancelled", LogLevel.Warning);
+                LogMessage("Flatten complete: " + positionsClosed + " positions, " + ordersCancelled + " orders cancelled");
 
-                return JsonConvert.SerializeObject(new {
-                    success = true,
-                    positions_closed = positionsClosed,
-                    orders_cancelled = ordersCancelled
-                });
+                return "{\"success\":true,\"positions_closed\":" + positionsClosed + ",\"orders_cancelled\":" + ordersCancelled + "}";
             }
             catch (Exception ex)
             {
-                Log($"Flatten failed: {ex.Message}", LogLevel.Error);
-                return JsonConvert.SerializeObject(new {
-                    success = false,
-                    error = ex.Message
-                });
+                LogMessage("Flatten failed: " + ex.Message);
+                return "{\"success\":false,\"error\":\"" + EscapeJsonString(ex.Message) + "\"}";
             }
         }
 
@@ -464,88 +476,98 @@ namespace NinjaTrader.NinjaScript.AddOns
             var account = GetAccount();
             if (account == null)
             {
-                return JsonConvert.SerializeObject(new {
-                    connected = false,
-                    error = "No account connected"
-                });
+                return "{\"connected\":false,\"error\":\"No account connected\"}";
             }
 
             try
             {
                 // Build position list
-                var positions = new List<object>();
+                var positionsList = new List<string>();
                 foreach (Position position in account.Positions)
                 {
                     if (position.MarketPosition != MarketPosition.Flat)
                     {
-                        positions.Add(new {
-                            instrument = position.Instrument.FullName,
-                            quantity = position.Quantity,
-                            direction = position.MarketPosition.ToString(),
-                            avg_price = position.AveragePrice,
-                            unrealized_pnl = position.GetUnrealizedProfitLoss(PerformanceUnit.Currency)
-                        });
+                        double posUnrealizedPnl = position.GetUnrealizedProfitLoss(PerformanceUnit.Currency);
+                        positionsList.Add("{\"instrument\":\"" + EscapeJsonString(position.Instrument.FullName) +
+                            "\",\"quantity\":" + position.Quantity +
+                            ",\"direction\":\"" + position.MarketPosition.ToString() +
+                            "\",\"avg_price\":" + position.AveragePrice.ToString("F2", CultureInfo.InvariantCulture) +
+                            ",\"unrealized_pnl\":" + posUnrealizedPnl.ToString("F2", CultureInfo.InvariantCulture) + "}");
                     }
                 }
 
                 // Build open orders list
-                var openOrders = new List<object>();
+                var ordersList = new List<string>();
                 foreach (Order order in account.Orders)
                 {
                     if (order.OrderState == OrderState.Working ||
                         order.OrderState == OrderState.Accepted ||
                         order.OrderState == OrderState.Submitted)
                     {
-                        openOrders.Add(new {
-                            order_id = order.Id.ToString(),
-                            instrument = order.Instrument.FullName,
-                            action = order.OrderAction.ToString(),
-                            quantity = order.Quantity,
-                            order_type = order.OrderType.ToString(),
-                            stop_price = order.StopPrice,
-                            limit_price = order.LimitPrice,
-                            state = order.OrderState.ToString()
-                        });
+                        ordersList.Add("{\"order_id\":\"" + order.OrderId +
+                            "\",\"instrument\":\"" + EscapeJsonString(order.Instrument.FullName) +
+                            "\",\"action\":\"" + order.OrderAction.ToString() +
+                            "\",\"quantity\":" + order.Quantity +
+                            ",\"order_type\":\"" + order.OrderType.ToString() +
+                            "\",\"stop_price\":" + order.StopPrice.ToString("F2", CultureInfo.InvariantCulture) +
+                            ",\"limit_price\":" + order.LimitPrice.ToString("F2", CultureInfo.InvariantCulture) +
+                            ",\"state\":\"" + order.OrderState.ToString() + "\"}");
                     }
                 }
 
-                return JsonConvert.SerializeObject(new {
-                    connected = true,
-                    account_name = account.Name,
-                    cash_balance = account.Get(AccountItem.CashValue, Currency.UsDollar),
-                    realized_pnl = account.Get(AccountItem.RealizedProfitLoss, Currency.UsDollar),
-                    unrealized_pnl = account.Get(AccountItem.UnrealizedProfitLoss, Currency.UsDollar),
-                    total_equity = account.Get(AccountItem.NetLiquidation, Currency.UsDollar),
-                    buying_power = account.Get(AccountItem.BuyingPower, Currency.UsDollar),
-                    positions = positions,
-                    open_orders = openOrders,
-                    timestamp = DateTime.UtcNow
-                });
+                double cashBalance = account.Get(AccountItem.CashValue, Currency.UsDollar);
+                double realizedPnl = account.Get(AccountItem.RealizedProfitLoss, Currency.UsDollar);
+                double acctUnrealizedPnl = account.Get(AccountItem.UnrealizedProfitLoss, Currency.UsDollar);
+                double totalEquity = account.Get(AccountItem.NetLiquidation, Currency.UsDollar);
+                double buyingPower = account.Get(AccountItem.BuyingPower, Currency.UsDollar);
+
+                return "{\"connected\":true" +
+                    ",\"account_name\":\"" + EscapeJsonString(account.Name) + "\"" +
+                    ",\"cash_balance\":" + cashBalance.ToString("F2", CultureInfo.InvariantCulture) +
+                    ",\"realized_pnl\":" + realizedPnl.ToString("F2", CultureInfo.InvariantCulture) +
+                    ",\"unrealized_pnl\":" + acctUnrealizedPnl.ToString("F2", CultureInfo.InvariantCulture) +
+                    ",\"total_equity\":" + totalEquity.ToString("F2", CultureInfo.InvariantCulture) +
+                    ",\"buying_power\":" + buyingPower.ToString("F2", CultureInfo.InvariantCulture) +
+                    ",\"positions\":[" + string.Join(",", positionsList) + "]" +
+                    ",\"open_orders\":[" + string.Join(",", ordersList) + "]" +
+                    ",\"timestamp\":\"" + DateTime.UtcNow.ToString("o") + "\"}";
             }
             catch (Exception ex)
             {
-                Log($"Status query failed: {ex.Message}", LogLevel.Error);
-                return JsonConvert.SerializeObject(new {
-                    connected = true,
-                    error = ex.Message
-                });
+                LogMessage("Status query failed: " + ex.Message);
+                return "{\"connected\":true,\"error\":\"" + EscapeJsonString(ex.Message) + "\"}";
             }
         }
 
-        // ── Logging ─────────────────────────────────────────────────────────
+        // ── Helpers ─────────────────────────────────────────────────────────
 
-        private void Log(string message, LogLevel level)
+        private string EscapeJsonString(string s)
         {
-            NinjaTrader.Code.Output.Process($"[ATSBridge] {message}", PrintTo.OutputTab1);
+            if (string.IsNullOrEmpty(s)) return "";
+            return s.Replace("\\", "\\\\")
+                    .Replace("\"", "\\\"")
+                    .Replace("\n", "\\n")
+                    .Replace("\r", "\\r")
+                    .Replace("\t", "\\t");
+        }
+
+        private void LogMessage(string message)
+        {
+            // Output to NinjaTrader Output window
+            NinjaTrader.Code.Output.Process("[ATSBridge] " + message, PrintTo.OutputTab1);
 
             // Also write to file for debugging
             try
             {
-                string logPath = Path.Combine(
+                string logDir = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-                    "NinjaTrader 8", "logs", "atsbridge.log"
+                    "NinjaTrader 8", "logs"
                 );
-                string logLine = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [{level}] {message}\n";
+                if (!Directory.Exists(logDir))
+                    Directory.CreateDirectory(logDir);
+
+                string logPath = Path.Combine(logDir, "atsbridge.log");
+                string logLine = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " " + message + Environment.NewLine;
                 File.AppendAllText(logPath, logLine);
             }
             catch { /* Ignore logging errors */ }
