@@ -13,11 +13,9 @@ import pytz
 from config import (
     WEBHOOK_SECRET,
     INSTRUMENT,
-    TRADOVATE_USERNAME,
-    TRADOVATE_PASSWORD,
+    NINJATRADER_BRIDGE_URL,
 )
-from tradovate.client import TradovateClient
-from tradovate.websocket import TradovateWebSocket
+from ninjatrader.bridge_client import NinjaTraderBridgeClient
 from rules.mffu_rules import MFFURulesEngine
 from rules.news_calendar import NewsCalendar
 from rules.risk import calculate_position_size, round_to_tick
@@ -40,7 +38,7 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # ── Component initialization ───────────────────────────────
-tv_client       = TradovateClient()
+tv_client       = NinjaTraderBridgeClient()
 news_calendar   = NewsCalendar()
 rules_engine    = MFFURulesEngine(news_calendar=news_calendar)
 bar_monitor     = None   # initialized after on_entry_confirmed is defined
@@ -55,18 +53,21 @@ def bootstrap():
 
     logger.info("=== ATS Trading Agent starting up ===")
 
-    # Authenticate with Tradovate (only if credentials are configured)
-    if TRADOVATE_USERNAME and TRADOVATE_PASSWORD:
-        tv_client.authenticate()
+    # Authenticate with NinjaTrader bridge (only if URL is configured)
+    if NINJATRADER_BRIDGE_URL:
+        try:
+            tv_client.authenticate()
 
-        # Sync initial account state
-        summary = tv_client.get_account_summary()
-        rules_engine.sync_from_tradovate(summary)
-        logger.info(f"Account state synced: {rules_engine.status()}")
+            # Sync initial account state
+            summary = tv_client.get_account_summary()
+            rules_engine.sync_from_tradovate(summary)
+            logger.info(f"Account state synced: {rules_engine.status()}")
+        except Exception as e:
+            logger.warning(f"NinjaTrader bridge connection failed: {e}")
     else:
         logger.warning(
-            "Tradovate credentials not configured — skipping authentication. "
-            "Set TRADOVATE_USERNAME and TRADOVATE_PASSWORD to enable trading."
+            "NinjaTrader bridge not configured — skipping authentication. "
+            "Set NINJATRADER_BRIDGE_URL to enable trading."
         )
 
     # Refresh news calendar
@@ -89,22 +90,14 @@ def bootstrap():
         position_monitor=position_monitor,
     )
 
-    # Connect WebSocket for live price data (only if authenticated)
-    if TRADOVATE_USERNAME and TRADOVATE_PASSWORD:
-        ws_client = TradovateWebSocket(
-            access_token=tv_client.access_token,
-            on_tick=_on_tick,
-            on_bar=_on_bar,
-        )
-        ws_client.connect()
-        ws_client.subscribe_quotes(INSTRUMENT)
+    # Note: WebSocket for live price data not available with NinjaTrader bridge
+    # Price data comes from NinjaTrader directly via the bridge's /status endpoint
 
-    # Scheduler: refresh news calendar daily, sync account hourly
+    # Scheduler: refresh news calendar daily, sync account periodically
     scheduler = BackgroundScheduler(timezone=pytz.utc)
     scheduler.add_job(news_calendar.refresh,             "cron", hour=0, minute=5)
-    if TRADOVATE_USERNAME and TRADOVATE_PASSWORD:
+    if NINJATRADER_BRIDGE_URL:
         scheduler.add_job(_sync_account,                 "interval", minutes=15)
-        scheduler.add_job(tv_client.refresh_if_needed,   "interval", minutes=10)
     scheduler.start()
 
     logger.info("=== ATS Trading Agent ready ===")

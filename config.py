@@ -3,7 +3,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ── Tradovate ──────────────────────────────────────────────
+# ── NinjaTrader Bridge ────────────────────────────────────
+NINJATRADER_BRIDGE_URL = os.getenv("NINJATRADER_BRIDGE_URL", "http://localhost:8080")
+
+# ── Tradovate (legacy) ────────────────────────────────────
 TRADOVATE_ENV         = os.getenv("TRADOVATE_ENV", "demo")
 TRADOVATE_USERNAME    = os.getenv("TRADOVATE_USERNAME")
 TRADOVATE_PASSWORD    = os.getenv("TRADOVATE_PASSWORD")

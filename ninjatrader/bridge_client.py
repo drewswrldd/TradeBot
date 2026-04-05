@@ -2,23 +2,27 @@
 NinjaTrader Bridge Client.
 
 Drop-in replacement for TradovateClient that sends HTTP requests to the
-NinjaTrader ATSBridge AddOn running on localhost:8080.
+NinjaTrader ATSBridge AddOn (locally or via ngrok tunnel).
 
 Usage:
     # In app.py, replace:
     #   from tradovate.client import TradovateClient
     # with:
     #   from ninjatrader.bridge_client import NinjaTraderBridgeClient as TradovateClient
+
+Environment Variables:
+    NINJATRADER_BRIDGE_URL: URL of the NinjaTrader bridge (default: http://localhost:8080)
 """
 
 import logging
+import os
 import requests
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Default NinjaTrader bridge URL
-NINJATRADER_BRIDGE_URL = "http://localhost:8080"
+# Read bridge URL from environment, default to localhost
+NINJATRADER_BRIDGE_URL = os.getenv("NINJATRADER_BRIDGE_URL", "http://localhost:8080")
 
 # Map TradingView/Tradovate symbols to NinjaTrader format
 # MESH5 → MES 06-25 (June 2025)
@@ -61,7 +65,7 @@ class NinjaTraderBridgeClient:
                 raise RuntimeError(f"NinjaTrader bridge not connected: {status.get('error')}")
         except requests.exceptions.ConnectionError:
             raise RuntimeError(
-                "Cannot connect to NinjaTrader bridge at localhost:8080. "
+                f"Cannot connect to NinjaTrader bridge at {self.base_url}. "
                 "Ensure NinjaTrader is running with ATSBridge AddOn enabled."
             )
 
