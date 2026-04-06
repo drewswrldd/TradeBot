@@ -4,7 +4,10 @@ Receives TradingView webhook alerts and orchestrates the agent pipeline.
 """
 
 import logging
-from flask import Flask, request, jsonify, render_template_string
+import re
+from flask import Flask, request, jsonify, render_template_string, abort
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from apscheduler.schedulers.background import BackgroundScheduler
 import pytz
 from datetime import datetime, timezone
@@ -37,8 +40,59 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Security logger - separate file for blocked requests
+security_logger = logging.getLogger("security")
+security_handler = logging.FileHandler("logs/security.log")
+security_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+security_logger.addHandler(security_handler)
+security_logger.setLevel(logging.WARNING)
+
 # ── Flask app ──────────────────────────────────────────────
 app = Flask(__name__)
+
+# ── Rate limiting ──────────────────────────────────────────
+limiter = Limiter(
+    key_func=get_remote_address,
+    app=app,
+    default_limits=[],  # No default limits, apply per-endpoint
+    storage_uri="memory://",
+)
+
+# ── Security: Block sensitive paths ────────────────────────
+BLOCKED_PATH_PATTERNS = [
+    r"^/\.env",
+    r"^/\.git",
+    r"^/etc",
+    r"^/wp-",
+    r"^/admin",
+    r"^/phpmyadmin",
+    r"^/\.htaccess",
+    r"^/config\.py",
+    r"^/.*\.pem$",
+    r"^/.*\.key$",
+]
+BLOCKED_PATH_REGEX = re.compile("|".join(BLOCKED_PATH_PATTERNS), re.IGNORECASE)
+
+
+@app.before_request
+def block_sensitive_paths():
+    """Block requests to sensitive paths and log them."""
+    path = request.path
+    if BLOCKED_PATH_REGEX.search(path):
+        ip = request.remote_addr
+        user_agent = request.headers.get("User-Agent", "unknown")
+        security_logger.warning(
+            f"BLOCKED: ip={ip} path={path} method={request.method} ua={user_agent}"
+        )
+        abort(403)
+
+
+@app.errorhandler(429)
+def rate_limit_exceeded(e):
+    """Handle rate limit exceeded errors."""
+    ip = request.remote_addr
+    security_logger.warning(f"RATE_LIMITED: ip={ip} path={request.path}")
+    return jsonify({"error": "Rate limit exceeded", "retry_after": 60}), 429
 
 # ── Component initialization ───────────────────────────────
 tv_client       = NinjaTraderBridgeClient()
@@ -219,6 +273,7 @@ def calculate_trade_pnl(trade: OpenTrade, exit_price: float) -> float:
 # ── Webhook endpoint ───────────────────────────────────────
 
 @app.route("/webhook/ats", methods=["POST"])
+@limiter.limit("60 per minute")
 def ats_webhook():
     """
     TradingView sends POST here when ATS changes color.
