@@ -230,16 +230,20 @@ def ats_webhook():
         "color":        "blue" | "red",
         "trigger_high": 5284.50,
         "trigger_low":  5271.25,
-        "atr":          12.50,      // ATR value for stop calculation
+        "atr":          12.50,      // ATR value for stop calculation (optional, defaults to 10.0)
         "bar_time":     "2025-04-05T14:00:00Z",
         "close_price":  5278.75     // close of the bar that caused the color change
     }
     """
     global _current_signal_id
 
+    # Get raw body for error logging
+    raw_body = request.get_data(as_text=True)
+
     data = request.get_json(silent=True)
     if not data:
-        return jsonify({"error": "Invalid JSON"}), 400
+        logger.error(f"Invalid JSON received. Raw body: {raw_body}")
+        return jsonify({"error": "Invalid JSON", "raw_body": raw_body[:500]}), 400
 
     # ── Verify webhook secret ──
     if data.get("secret") != WEBHOOK_SECRET:
@@ -250,9 +254,16 @@ def ats_webhook():
     color        = data.get("color", "").lower()
     trigger_high = data.get("trigger_high")
     trigger_low  = data.get("trigger_low")
-    atr          = data.get("atr")
     bar_time     = data.get("bar_time", "")
     close_price  = data.get("close_price")
+
+    # ATR is optional - default to 10.0 if missing or invalid
+    atr_raw = data.get("atr")
+    try:
+        atr = float(atr_raw) if atr_raw is not None else 10.0
+    except (ValueError, TypeError):
+        logger.warning(f"Invalid atr value '{atr_raw}', using default 10.0. Raw body: {raw_body[:200]}")
+        atr = 10.0
 
     logger.info(
         f"ATS webhook received: {color.upper()} | {direction.upper()} | "
@@ -268,23 +279,50 @@ def ats_webhook():
         return jsonify({"status": "reversal_processed"}), 200
 
     # ── No open trade — queue the new signal for confirmation ──
-    if not all([trigger_high, trigger_low, atr]):
-        return jsonify({"error": "Missing required price fields (trigger_high, trigger_low, atr)"}), 400
+    # Validate required fields with detailed error logging
+    missing_fields = []
+    invalid_fields = []
+
+    if not trigger_high:
+        missing_fields.append("trigger_high")
+    else:
+        try:
+            trigger_high = float(trigger_high)
+        except (ValueError, TypeError):
+            invalid_fields.append(f"trigger_high='{trigger_high}'")
+
+    if not trigger_low:
+        missing_fields.append("trigger_low")
+    else:
+        try:
+            trigger_low = float(trigger_low)
+        except (ValueError, TypeError):
+            invalid_fields.append(f"trigger_low='{trigger_low}'")
+
+    if missing_fields or invalid_fields:
+        error_msg = []
+        if missing_fields:
+            error_msg.append(f"Missing fields: {missing_fields}")
+        if invalid_fields:
+            error_msg.append(f"Invalid fields: {invalid_fields}")
+        full_error = "; ".join(error_msg)
+        logger.error(f"Webhook validation failed: {full_error}. Raw body: {raw_body}")
+        return jsonify({"error": full_error, "raw_body": raw_body[:500]}), 400
 
     # Log signal to database
     _current_signal_id = trade_db.log_signal(
         direction=direction,
-        trigger_high=float(trigger_high),
-        trigger_low=float(trigger_low),
-        atr=float(atr),
+        trigger_high=trigger_high,
+        trigger_low=trigger_low,
+        atr=atr,
         bar_time=bar_time,
     )
 
     signal = PendingSignal(
         direction     = direction,
-        trigger_high  = float(trigger_high),
-        trigger_low   = float(trigger_low),
-        atr           = float(atr),
+        trigger_high  = trigger_high,
+        trigger_low   = trigger_low,
+        atr           = atr,
         ats_bar_time  = bar_time,
     )
 
