@@ -439,7 +439,7 @@ DASHBOARD_HTML = """
             padding: 20px;
             line-height: 1.6;
         }
-        .container { max-width: 1200px; margin: 0 auto; }
+        .container { max-width: 1400px; margin: 0 auto; }
         h1 {
             color: #58a6ff;
             margin-bottom: 20px;
@@ -465,6 +465,10 @@ DASHBOARD_HTML = """
             border: 1px solid #30363d;
             border-radius: 8px;
             padding: 20px;
+        }
+        .card.alert-card {
+            border: 2px solid #f85149;
+            background: linear-gradient(135deg, #2d1b1b 0%, #161b22 100%);
         }
         .stat-row {
             display: flex;
@@ -534,13 +538,220 @@ DASHBOARD_HTML = """
         }
         .event-time { color: #58a6ff; font-family: 'SF Mono', monospace; }
         .no-data { color: #484f58; font-style: italic; }
+
+        /* NEW: Critical alert banner */
+        .critical-banner {
+            background: linear-gradient(90deg, #da3633, #f85149);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+            text-align: center;
+            font-weight: 600;
+            font-size: 18px;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.8; }
+        }
+
+        /* NEW: Status indicators */
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+        .status-indicator.green { background: #3fb950; box-shadow: 0 0 6px #3fb950; }
+        .status-indicator.yellow { background: #d29922; box-shadow: 0 0 6px #d29922; }
+        .status-indicator.red { background: #f85149; box-shadow: 0 0 6px #f85149; }
+
+        /* NEW: Limit row styling */
+        .limit-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid #21262d;
+        }
+        .limit-row:last-child { border-bottom: none; }
+        .limit-info {
+            display: flex;
+            flex-direction: column;
+        }
+        .limit-name {
+            color: #c9d1d9;
+            font-weight: 500;
+        }
+        .limit-detail {
+            color: #8b949e;
+            font-size: 12px;
+            margin-top: 2px;
+        }
+        .limit-status {
+            font-family: 'SF Mono', monospace;
+            font-weight: 600;
+        }
+
+        /* Weekly reduced notice */
+        .reduced-notice {
+            background: #2d2a1b;
+            border: 1px solid #d29922;
+            border-radius: 6px;
+            padding: 10px;
+            margin-top: 10px;
+            font-size: 13px;
+            color: #d29922;
+        }
     </style>
 </head>
 <body>
     <div class="container">
+        {% if account.challenge_blown %}
+        <div class="critical-banner">
+            CHALLENGE BLOWN — BOT SHUTDOWN — MANUAL INTERVENTION REQUIRED
+        </div>
+        {% endif %}
+
         <h1>ATS Trading Dashboard</h1>
 
         <div class="grid">
+            <!-- Daily Safety Limits -->
+            <div class="card {% if account.challenge_blown %}alert-card{% endif %}">
+                <h2>Daily Safety Limits</h2>
+
+                <!-- Daily P&L vs Loss Limit -->
+                <div class="limit-row">
+                    <div class="limit-info">
+                        <span class="limit-name">
+                            <span class="status-indicator {{ 'red' if account.daily_loss_lockout else 'yellow' if account.today_profit < -250 else 'green' }}"></span>
+                            Daily Loss Limit
+                        </span>
+                        <span class="limit-detail">Max loss: ${{ account.daily_loss_limit }}</span>
+                    </div>
+                    <span class="limit-status {{ 'negative' if account.today_profit < 0 else 'positive' }}">
+                        {% if account.daily_loss_lockout %}
+                            LOCKED
+                        {% else %}
+                            ${{ "{:,.2f}".format(account.today_profit) }} / -${{ account.daily_loss_limit }}
+                        {% endif %}
+                    </span>
+                </div>
+
+                <!-- Daily P&L vs Profit Target -->
+                <div class="limit-row">
+                    <div class="limit-info">
+                        <span class="limit-name">
+                            <span class="status-indicator {{ 'green' if account.daily_profit_lockout else 'yellow' if account.today_profit > 200 else 'green' }}"></span>
+                            Daily Profit Target
+                        </span>
+                        <span class="limit-detail">Target: ${{ account.daily_profit_target }}</span>
+                    </div>
+                    <span class="limit-status {{ 'positive' if account.today_profit > 0 else 'negative' if account.today_profit < 0 else '' }}">
+                        {% if account.daily_profit_lockout %}
+                            TARGET HIT
+                        {% else %}
+                            ${{ "{:,.2f}".format(account.today_profit) }} / ${{ account.daily_profit_target }}
+                        {% endif %}
+                    </span>
+                </div>
+
+                <!-- Trailing Profit Protection -->
+                <div class="limit-row">
+                    <div class="limit-info">
+                        <span class="limit-name">
+                            <span class="status-indicator {{ 'red' if account.trailing_profit_lockout else 'yellow' if account.trailing_protection_level else 'green' }}"></span>
+                            Trailing Protection
+                        </span>
+                        <span class="limit-detail">
+                            Peak: ${{ "{:,.2f}".format(account.today_peak_profit) }}
+                            {% if account.trailing_protection_level %}
+                            | Stop at: ${{ "{:,.2f}".format(account.trailing_protection_level) }}
+                            {% endif %}
+                        </span>
+                    </div>
+                    <span class="limit-status {{ 'warning' if account.trailing_profit_lockout else '' }}">
+                        {% if account.trailing_profit_lockout %}
+                            STOPPED
+                        {% elif account.trailing_protection_level %}
+                            ACTIVE
+                        {% else %}
+                            INACTIVE
+                        {% endif %}
+                    </span>
+                </div>
+            </div>
+
+            <!-- Weekly Limits -->
+            <div class="card">
+                <h2>Weekly Limits</h2>
+                <div class="stat-row">
+                    <span class="stat-label">
+                        <span class="status-indicator {{ 'yellow' if account.weekly_contracts_reduced else 'green' }}"></span>
+                        Weekly Profit
+                    </span>
+                    <span class="stat-value {{ 'positive' if account.weekly_profit >= 0 else 'negative' }}">
+                        ${{ "{:,.2f}".format(account.weekly_profit) }}
+                    </span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Weekly Target</span>
+                    <span class="stat-value">${{ "{:,.0f}".format(account.weekly_profit_target) }}</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Max Contracts</span>
+                    <span class="stat-value {{ 'warning' if account.weekly_contracts_reduced else '' }}">
+                        {{ account.effective_max_contracts }}
+                        {% if account.weekly_contracts_reduced %}(reduced){% endif %}
+                    </span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill {{ 'yellow' if account.weekly_profit >= account.weekly_profit_target else 'green' }}"
+                         style="width: {{ [account.weekly_profit / account.weekly_profit_target * 100, 100]|min if account.weekly_profit > 0 else 0 }}%"></div>
+                </div>
+                {% if account.weekly_contracts_reduced %}
+                <div class="reduced-notice">
+                    Weekly target reached — trading with reduced position size (1 contract max)
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- Drawdown Status -->
+            <div class="card {% if account.challenge_blown %}alert-card{% endif %}">
+                <h2>Drawdown Status</h2>
+                <div class="stat-row">
+                    <span class="stat-label">
+                        <span class="status-indicator {{ 'red' if account.internal_drawdown_remaining < 200 else 'yellow' if account.internal_drawdown_remaining < 500 else 'green' }}"></span>
+                        Internal DD Remaining
+                    </span>
+                    <span class="stat-value {{ 'negative' if account.internal_drawdown_remaining < 200 else 'warning' if account.internal_drawdown_remaining < 500 else '' }}">
+                        ${{ "{:,.2f}".format(account.internal_drawdown_remaining) }}
+                    </span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">MFFU DD Remaining</span>
+                    <span class="stat-value {{ 'negative' if account.drawdown_remaining < 300 else 'warning' if account.drawdown_remaining < 700 else '' }}">
+                        ${{ "{:,.2f}".format(account.drawdown_remaining) }}
+                    </span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Drawdown Used</span>
+                    <span class="stat-value {{ 'negative' if account.drawdown_used > 1000 else 'warning' if account.drawdown_used > 500 else '' }}">
+                        ${{ "{:,.2f}".format(account.drawdown_used) }}
+                    </span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill {{ 'red' if account.drawdown_pct > 50 else 'yellow' if account.drawdown_pct > 25 else 'green' }}"
+                         style="width: {{ account.drawdown_pct }}%"></div>
+                </div>
+                <div style="font-size: 11px; color: #8b949e; margin-top: 8px;">
+                    Internal limit: ${{ "{:,.0f}".format(account.internal_max_drawdown) }} | MFFU limit: ${{ "{:,.0f}".format(2000) }}
+                </div>
+            </div>
+
             <!-- Account Status -->
             <div class="card">
                 <h2>Account Status</h2>
@@ -549,42 +760,21 @@ DASHBOARD_HTML = """
                     <span class="stat-value">${{ "{:,.2f}".format(account.balance) }}</span>
                 </div>
                 <div class="stat-row">
+                    <span class="stat-label">High Water Mark</span>
+                    <span class="stat-value">${{ "{:,.2f}".format(account.high_water_mark) }}</span>
+                </div>
+                <div class="stat-row">
                     <span class="stat-label">Cycle Profit</span>
                     <span class="stat-value {{ 'positive' if account.cycle_profit >= 0 else 'negative' }}">
                         ${{ "{:,.2f}".format(account.cycle_profit) }}
                     </span>
                 </div>
                 <div class="stat-row">
-                    <span class="stat-label">Progress to Target</span>
+                    <span class="stat-label">Progress to $3K Target</span>
                     <span class="stat-value">{{ account.pct_to_target }}%</span>
                 </div>
                 <div class="progress-bar">
                     <div class="progress-fill green" style="width: {{ [account.pct_to_target, 100]|min }}%"></div>
-                </div>
-            </div>
-
-            <!-- Risk Status -->
-            <div class="card">
-                <h2>Risk Status</h2>
-                <div class="stat-row">
-                    <span class="stat-label">Drawdown Used</span>
-                    <span class="stat-value {{ 'negative' if account.drawdown_used > 1000 else 'warning' if account.drawdown_used > 500 else '' }}">
-                        ${{ "{:,.2f}".format(account.drawdown_used) }}
-                    </span>
-                </div>
-                <div class="stat-row">
-                    <span class="stat-label">Drawdown Remaining</span>
-                    <span class="stat-value">${{ "{:,.2f}".format(account.drawdown_remaining) }}</span>
-                </div>
-                <div class="stat-row">
-                    <span class="stat-label">Today's Profit</span>
-                    <span class="stat-value {{ 'positive' if account.today_profit >= 0 else 'negative' }}">
-                        ${{ "{:,.2f}".format(account.today_profit) }}
-                    </span>
-                </div>
-                <div class="progress-bar">
-                    <div class="progress-fill {{ 'red' if account.drawdown_pct > 50 else 'yellow' if account.drawdown_pct > 25 else 'green' }}"
-                         style="width: {{ account.drawdown_pct }}%"></div>
                 </div>
             </div>
 
@@ -680,6 +870,8 @@ DASHBOARD_HTML = """
             Last updated: {{ now.strftime('%Y-%m-%d %H:%M:%S') }} UTC
             &nbsp;|&nbsp;
             <a href="/dashboard" style="color: #58a6ff;">Refresh</a>
+            &nbsp;|&nbsp;
+            Trades today: {{ account.trades_today }}
         </p>
     </div>
 </body>
@@ -690,16 +882,45 @@ DASHBOARD_HTML = """
 @app.route("/dashboard", methods=["GET"])
 def dashboard():
     """Performance dashboard with account status, trades, and stats."""
+    from config import INTERNAL_MAX_DRAWDOWN, DAILY_LOSS_LIMIT, DAILY_PROFIT_TARGET, WEEKLY_PROFIT_TARGET
+
     # Get account status from rules engine
     account_status = rules_engine.status() if rules_engine else {}
     account_data = {
+        # Basic account info
         'balance': account_status.get('balance', ACCOUNT_SIZE),
+        'high_water_mark': account_status.get('high_water_mark', ACCOUNT_SIZE),
         'cycle_profit': account_status.get('cycle_profit', 0),
         'pct_to_target': account_status.get('pct_to_target', 0),
+
+        # Drawdown info
         'drawdown_used': account_status.get('drawdown_used', 0),
         'drawdown_remaining': account_status.get('drawdown_remaining', MAX_DRAWDOWN),
-        'today_profit': account_status.get('today_profit', 0),
+        'internal_drawdown_remaining': account_status.get('internal_drawdown_remaining', INTERNAL_MAX_DRAWDOWN),
         'drawdown_pct': round(account_status.get('drawdown_used', 0) / MAX_DRAWDOWN * 100, 1),
+        'internal_max_drawdown': INTERNAL_MAX_DRAWDOWN,
+
+        # Daily metrics
+        'today_profit': account_status.get('today_profit', 0),
+        'today_peak_profit': account_status.get('today_peak_profit', 0),
+        'trailing_protection_level': account_status.get('trailing_protection_level'),
+        'daily_loss_limit': DAILY_LOSS_LIMIT,
+        'daily_profit_target': DAILY_PROFIT_TARGET,
+        'daily_loss_lockout': account_status.get('daily_loss_lockout', False),
+        'daily_profit_lockout': account_status.get('daily_profit_lockout', False),
+        'trailing_profit_lockout': account_status.get('trailing_profit_lockout', False),
+
+        # Weekly metrics
+        'weekly_profit': account_status.get('weekly_profit', 0),
+        'weekly_profit_target': WEEKLY_PROFIT_TARGET,
+        'weekly_contracts_reduced': account_status.get('weekly_contracts_reduced', False),
+        'effective_max_contracts': account_status.get('effective_max_contracts', 2),
+
+        # Trade count
+        'trades_today': account_status.get('trades_today', 0),
+
+        # Critical flags
+        'challenge_blown': account_status.get('challenge_blown', False),
     }
 
     # Get trade stats from database

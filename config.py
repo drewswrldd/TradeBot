@@ -45,8 +45,15 @@ WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 ACCOUNT_SIZE    = float(os.getenv("ACCOUNT_SIZE",    50000))
 MAX_DRAWDOWN    = float(os.getenv("MAX_DRAWDOWN",     2000))
 PROFIT_TARGET   = float(os.getenv("PROFIT_TARGET",   3000))
-MAX_CONTRACTS   = int(os.getenv("MAX_CONTRACTS",        3))
-RISK_PERCENT    = float(os.getenv("RISK_PERCENT",      2.0))
+MAX_CONTRACTS   = int(os.getenv("MAX_CONTRACTS",        2))   # reduced from 3
+RISK_PERCENT    = float(os.getenv("RISK_PERCENT",      1.5)) # reduced from 2.0
+
+# ── Internal Safety Limits (stricter than MFFU) ─────────────
+DAILY_LOSS_LIMIT       = float(os.getenv("DAILY_LOSS_LIMIT",       500))
+DAILY_PROFIT_TARGET    = float(os.getenv("DAILY_PROFIT_TARGET",    300))
+WEEKLY_PROFIT_TARGET   = float(os.getenv("WEEKLY_PROFIT_TARGET",  1000))
+INTERNAL_MAX_DRAWDOWN  = float(os.getenv("INTERNAL_MAX_DRAWDOWN", 1500))
+TRAILING_DRAWDOWN_SHUTDOWN = os.getenv("TRAILING_DRAWDOWN_SHUTDOWN", "True").lower() == "true"
 
 # ── Strategy & Instrument ──────────────────────────────────
 STRATEGY   = int(os.getenv("STRATEGY", 1))

@@ -9,13 +9,28 @@ TradingView ATS webhook → Flask receiver → Bar confirmation monitor → MFFU
 
 ## Key Rules (NEVER violate)
 
+### MFFU Rules
 - Max trailing drawdown: $2,000 (EOD, from high-water mark)
 - Profit target: $3,000
-- Max contracts: 3 MES (configured in .env)
 - Consistency: no single day > 50% of profit target ($1,500)
 - Tier 1 news blackout: flat 2 min before/after event
-- Risk per trade: ≤ 2% of account balance
 - Max 200 trades/day
+
+### Internal Safety Rules (STRICTER than MFFU)
+- Max contracts: 2 MES (reduced from 3)
+- Risk per trade: ≤ 1.5% of account balance (reduced from 2%)
+- Internal max drawdown: $1,500 (triggers CHALLENGE_BLOWN shutdown)
+- Daily loss limit: $500 → blocks all trades for rest of day
+- Daily profit target: $300 → locks in gains for rest of day
+- Trailing profit protection: if profit was $200+ and drops $100 from peak → stop for day
+- Weekly profit target: $1,000 → reduces max contracts to 1
+
+### CHALLENGE_BLOWN Flag
+If internal drawdown ($1,500) is breached:
+1. Immediately flatten all positions
+2. Block ALL new trades permanently
+3. Set CHALLENGE_BLOWN flag in database
+4. Only manual intervention can restart (update .env, clear flag)
 
 ## ATS Strategy 1 Logic
 
