@@ -104,10 +104,12 @@ class BarConfirmationMonitor:
 
         if confirmed:
             signal.confirmed = True
+            logger.info("=" * 60)
             logger.info(
-                f"ENTRY CONFIRMED: {signal.direction.upper()} @ {entry_price:.2f} | "
+                f">>> ENTRY CONFIRMED <<< {signal.direction.upper()} @ {entry_price:.2f} | "
                 f"Trigger was {signal.entry_trigger_price:.2f}"
             )
+            logger.info("=" * 60)
             self._pending = None
             self.on_entry_confirmed(signal, entry_price)
 

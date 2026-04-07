@@ -33,6 +33,7 @@ using System.Windows;
 using System.Xml.Serialization;
 using NinjaTrader.Cbi;
 using NinjaTrader.Core;
+using NinjaTrader.Data;
 using NinjaTrader.Gui;
 using NinjaTrader.Gui.Tools;
 using NinjaTrader.NinjaScript;
@@ -45,6 +46,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // ── Configuration ───────────────────────────────────────────────────
         private const string LISTEN_PREFIX = "http://localhost:8080/";
         private const string TARGET_ACCOUNT = "MFFUEVFLX574013001";
+        private const string MES_INSTRUMENT = "MES 06-25";  // Current front-month MES contract
 
         // ── State ───────────────────────────────────────────────────────────
         private HttpListener _listener;
@@ -53,6 +55,11 @@ namespace NinjaTrader.NinjaScript.AddOns
         private Account _account;
         private readonly object _lock = new object();
         private bool _started = false;
+
+        // ── Market Data ─────────────────────────────────────────────────────
+        private Instrument _mesInstrument;
+        private double _lastPrice = 0.0;
+        private string _lastPriceInstrument = "";
 
         // ── Lifecycle ───────────────────────────────────────────────────────
 
@@ -111,6 +118,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 
                 // Connect to the target account
                 ConnectAccount();
+
+                // Subscribe to MES market data for price feed
+                SubscribeToMarketData();
             }
             catch (Exception ex)
             {
@@ -121,6 +131,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         private void StopHttpListener()
         {
             _running = false;
+
+            // Unsubscribe from market data
+            UnsubscribeFromMarketData();
 
             if (_listener != null)
             {
@@ -268,6 +281,71 @@ namespace NinjaTrader.NinjaScript.AddOns
                     ConnectAccount();
                 }
                 return _account;
+            }
+        }
+
+        // ── Market Data Subscription ─────────────────────────────────────────
+
+        private void SubscribeToMarketData()
+        {
+            try
+            {
+                _mesInstrument = Instrument.GetInstrument(MES_INSTRUMENT);
+                if (_mesInstrument == null)
+                {
+                    LogMessage("Warning: Could not find instrument " + MES_INSTRUMENT);
+                    return;
+                }
+
+                // Subscribe to market data events
+                lock (_lock)
+                {
+                    _lastPriceInstrument = MES_INSTRUMENT;
+
+                    // Use NinjaTrader's MarketData event subscription
+                    if (_mesInstrument.MarketData != null)
+                    {
+                        _mesInstrument.MarketData.Update += OnMarketDataUpdate;
+                        LogMessage("Subscribed to market data for " + MES_INSTRUMENT);
+                    }
+                    else
+                    {
+                        LogMessage("MarketData not available for " + MES_INSTRUMENT + " - will use position price if available");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                LogMessage("Error subscribing to market data: " + ex.Message);
+            }
+        }
+
+        private void UnsubscribeFromMarketData()
+        {
+            try
+            {
+                if (_mesInstrument != null && _mesInstrument.MarketData != null)
+                {
+                    _mesInstrument.MarketData.Update -= OnMarketDataUpdate;
+                    LogMessage("Unsubscribed from market data");
+                }
+            }
+            catch { }
+        }
+
+        private void OnMarketDataUpdate(object sender, MarketDataEventArgs e)
+        {
+            // Update last price on any trade or last price update
+            if (e.MarketDataType == MarketDataType.Last || e.MarketDataType == MarketDataType.DailyLow ||
+                e.MarketDataType == MarketDataType.DailyHigh)
+            {
+                if (e.MarketDataType == MarketDataType.Last && e.Price > 0)
+                {
+                    lock (_lock)
+                    {
+                        _lastPrice = e.Price;
+                    }
+                }
             }
         }
 
@@ -521,8 +599,19 @@ namespace NinjaTrader.NinjaScript.AddOns
                 double totalEquity = account.Get(AccountItem.NetLiquidation, Currency.UsDollar);
                 double buyingPower = account.Get(AccountItem.BuyingPower, Currency.UsDollar);
 
+                // Get the last traded price for MES
+                double lastPrice;
+                string lastPriceInstrument;
+                lock (_lock)
+                {
+                    lastPrice = _lastPrice;
+                    lastPriceInstrument = _lastPriceInstrument;
+                }
+
                 return "{\"connected\":true" +
                     ",\"account_name\":\"" + EscapeJsonString(account.Name) + "\"" +
+                    ",\"last_price\":" + (lastPrice > 0 ? lastPrice.ToString("F2", CultureInfo.InvariantCulture) : "null") +
+                    ",\"instrument\":\"" + EscapeJsonString(lastPriceInstrument) + "\"" +
                     ",\"cash_balance\":" + cashBalance.ToString("F2", CultureInfo.InvariantCulture) +
                     ",\"realized_pnl\":" + realizedPnl.ToString("F2", CultureInfo.InvariantCulture) +
                     ",\"unrealized_pnl\":" + acctUnrealizedPnl.ToString("F2", CultureInfo.InvariantCulture) +

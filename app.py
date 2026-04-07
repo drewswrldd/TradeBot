@@ -5,6 +5,8 @@ Receives TradingView webhook alerts and orchestrates the agent pipeline.
 
 import logging
 import re
+import threading
+import time
 from flask import Flask, request, jsonify, render_template_string, abort
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -103,9 +105,60 @@ bar_monitor     = None   # initialized after on_entry_confirmed is defined
 position_monitor = None  # initialized after exit callbacks are defined
 ws_client       = None
 agent           = None
+_price_poll_thread = None
+_price_poll_running = False
 
 # Track current signal_id for linking signals to trades
 _current_signal_id = None
+
+
+def _price_polling_loop():
+    """
+    Background thread that polls NinjaTrader bridge for current price.
+    Replaces the WebSocket price feed that was removed when switching from Tradovate.
+    """
+    global _price_poll_running
+
+    tick_count = 0
+    logger.info("Price polling loop started (5 second interval)")
+
+    while _price_poll_running:
+        try:
+            # Get status from NinjaTrader bridge (includes last_price)
+            status = tv_client._get_status()
+            last_price = status.get("last_price")
+
+            if last_price and last_price > 0:
+                # Log every 30 seconds (every 6th tick)
+                tick_count += 1
+                if tick_count % 6 == 0:
+                    logger.info(f"Price tick: {last_price}")
+
+                # Feed price to monitors
+                _on_tick(last_price)
+
+        except Exception as e:
+            logger.warning(f"Price poll failed: {e}")
+
+        # Sleep for 5 seconds
+        time.sleep(5)
+
+    logger.info("Price polling loop stopped")
+
+
+def _start_price_polling():
+    """Start the background price polling thread."""
+    global _price_poll_thread, _price_poll_running
+
+    _price_poll_running = True
+    _price_poll_thread = threading.Thread(target=_price_polling_loop, daemon=True, name="PricePoll")
+    _price_poll_thread.start()
+
+
+def _stop_price_polling():
+    """Stop the background price polling thread."""
+    global _price_poll_running
+    _price_poll_running = False
 
 
 def bootstrap():
@@ -151,8 +204,10 @@ def bootstrap():
         position_monitor=position_monitor,
     )
 
-    # Note: WebSocket for live price data not available with NinjaTrader bridge
-    # Price data comes from NinjaTrader directly via the bridge's /status endpoint
+    # Start price polling thread to get live prices from NinjaTrader bridge
+    # This replaces the WebSocket feed that was used with Tradovate
+    if NINJATRADER_BRIDGE_URL:
+        _start_price_polling()
 
     # Scheduler: refresh news calendar daily, sync account periodically
     scheduler = BackgroundScheduler(timezone=pytz.utc)
