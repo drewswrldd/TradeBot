@@ -114,25 +114,27 @@ _current_signal_id = None
 
 def _price_polling_loop():
     """
-    Background thread that polls NinjaTrader bridge for current price.
+    Background thread that polls NinjaTrader bridge /price endpoint for current price.
     Replaces the WebSocket price feed that was removed when switching from Tradovate.
     """
     global _price_poll_running
 
     tick_count = 0
-    logger.info("Price polling loop started (5 second interval)")
+    logger.info("Price polling loop started (5 second interval, polling /price endpoint)")
 
     while _price_poll_running:
         try:
-            # Get status from NinjaTrader bridge (includes last_price)
-            status = tv_client._get_status()
-            last_price = status.get("last_price")
+            # Get price from NinjaTrader bridge /price endpoint
+            price_data = tv_client._get_price()
+            last_price = price_data.get("last_price")
 
             if last_price and last_price > 0:
                 # Log every 30 seconds (every 6th tick)
                 tick_count += 1
                 if tick_count % 6 == 0:
-                    logger.info(f"Price tick: {last_price}")
+                    bid = price_data.get("bid", "N/A")
+                    ask = price_data.get("ask", "N/A")
+                    logger.info(f"Price tick: {last_price} (bid={bid}, ask={ask})")
 
                 # Feed price to monitors
                 _on_tick(last_price)

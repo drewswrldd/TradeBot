@@ -81,6 +81,12 @@ class NinjaTraderBridgeClient:
         resp.raise_for_status()
         return resp.json()
 
+    def _get_price(self) -> dict:
+        """Get live MES price from the bridge."""
+        resp = self._session.get(f"{self.base_url}/price", timeout=5)
+        resp.raise_for_status()
+        return resp.json()
+
     def _post_order(self, payload: dict) -> dict:
         """Post an order to the bridge."""
         resp = self._session.post(f"{self.base_url}/order", json=payload, timeout=10)

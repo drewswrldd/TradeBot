@@ -14,6 +14,7 @@
 //   POST /order   — Place an order
 //   POST /flatten — Flatten all positions
 //   GET  /status  — Get position and account info
+//   GET  /price   — Get live MES price (last, bid, ask)
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -59,6 +60,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         // ── Market Data ─────────────────────────────────────────────────────
         private Instrument _mesInstrument;
         private double _lastPrice = 0.0;
+        private double _bidPrice = 0.0;
+        private double _askPrice = 0.0;
         private string _lastPriceInstrument = "";
 
         // ── Lifecycle ───────────────────────────────────────────────────────
@@ -200,6 +203,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     responseJson = HandleStatus();
                 }
+                else if (path == "/price" && method == "GET")
+                {
+                    responseJson = HandlePrice();
+                }
                 else if (path == "/health" && method == "GET")
                 {
                     responseJson = "{\"status\":\"ok\",\"timestamp\":\"" + DateTime.UtcNow.ToString("o") + "\"}";
@@ -335,15 +342,22 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private void OnMarketDataUpdate(object sender, MarketDataEventArgs e)
         {
-            // Update last price on any trade or last price update
-            if (e.MarketDataType == MarketDataType.Last || e.MarketDataType == MarketDataType.DailyLow ||
-                e.MarketDataType == MarketDataType.DailyHigh)
+            // Update prices based on market data type
+            if (e.Price > 0)
             {
-                if (e.MarketDataType == MarketDataType.Last && e.Price > 0)
+                lock (_lock)
                 {
-                    lock (_lock)
+                    switch (e.MarketDataType)
                     {
-                        _lastPrice = e.Price;
+                        case MarketDataType.Last:
+                            _lastPrice = e.Price;
+                            break;
+                        case MarketDataType.Bid:
+                            _bidPrice = e.Price;
+                            break;
+                        case MarketDataType.Ask:
+                            _askPrice = e.Price;
+                            break;
                     }
                 }
             }
@@ -626,6 +640,40 @@ namespace NinjaTrader.NinjaScript.AddOns
                 LogMessage("Status query failed: " + ex.Message);
                 return "{\"connected\":true,\"error\":\"" + EscapeJsonString(ex.Message) + "\"}";
             }
+        }
+
+        // ── Price Handling ─────────────────────────────────────────────────
+
+        private string HandlePrice()
+        {
+            double lastPrice, bidPrice, askPrice;
+            string instrument;
+
+            lock (_lock)
+            {
+                lastPrice = _lastPrice;
+                bidPrice = _bidPrice;
+                askPrice = _askPrice;
+                instrument = _lastPriceInstrument;
+            }
+
+            // If we don't have prices yet, try to get them from the instrument
+            if (lastPrice == 0 && _mesInstrument != null && _mesInstrument.MarketData != null)
+            {
+                try
+                {
+                    lastPrice = _mesInstrument.MarketData.Last.Price;
+                    bidPrice = _mesInstrument.MarketData.Bid.Price;
+                    askPrice = _mesInstrument.MarketData.Ask.Price;
+                }
+                catch { }
+            }
+
+            return "{\"last_price\":" + (lastPrice > 0 ? lastPrice.ToString("F2", CultureInfo.InvariantCulture) : "null") +
+                ",\"bid\":" + (bidPrice > 0 ? bidPrice.ToString("F2", CultureInfo.InvariantCulture) : "null") +
+                ",\"ask\":" + (askPrice > 0 ? askPrice.ToString("F2", CultureInfo.InvariantCulture) : "null") +
+                ",\"instrument\":\"" + EscapeJsonString(instrument) + "\"" +
+                ",\"timestamp\":\"" + DateTime.UtcNow.ToString("o") + "\"}";
         }
 
         // ── Helpers ─────────────────────────────────────────────────────────
