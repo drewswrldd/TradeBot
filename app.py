@@ -111,33 +111,49 @@ _price_poll_running = False
 # Track current signal_id for linking signals to trades
 _current_signal_id = None
 
+# Last known price from TradingView webhooks (fallback when NinjaTrader price unavailable)
+_last_known_price = 0.0
+
 
 def _price_polling_loop():
     """
-    Background thread that polls NinjaTrader bridge /price endpoint for current price.
-    Replaces the WebSocket price feed that was removed when switching from Tradovate.
+    Background thread that checks price and feeds it to monitors.
+    Uses NinjaTrader /price endpoint if available, falls back to last_known_price
+    from TradingView webhooks.
     """
     global _price_poll_running
 
     tick_count = 0
-    logger.info("Price polling loop started (5 second interval, polling /price endpoint)")
+    logger.info("Price polling loop started (5 second interval)")
 
     while _price_poll_running:
         try:
-            # Get price from NinjaTrader bridge /price endpoint
-            price_data = tv_client._get_price()
-            last_price = price_data.get("last_price")
+            price_to_use = None
+            source = None
 
-            if last_price and last_price > 0:
+            # Try NinjaTrader bridge first
+            try:
+                price_data = tv_client._get_price()
+                nt_price = price_data.get("last_price")
+                if nt_price and nt_price > 0:
+                    price_to_use = nt_price
+                    source = "NT"
+            except Exception:
+                pass
+
+            # Fall back to last known price from TradingView webhooks
+            if not price_to_use and _last_known_price > 0:
+                price_to_use = _last_known_price
+                source = "TV"
+
+            if price_to_use:
                 # Log every 30 seconds (every 6th tick)
                 tick_count += 1
                 if tick_count % 6 == 0:
-                    bid = price_data.get("bid", "N/A")
-                    ask = price_data.get("ask", "N/A")
-                    logger.info(f"Price tick: {last_price} (bid={bid}, ask={ask})")
+                    logger.info(f"Price tick: {price_to_use} (source={source})")
 
                 # Feed price to monitors
-                _on_tick(last_price)
+                _on_tick(price_to_use)
 
         except Exception as e:
             logger.warning(f"Price poll failed: {e}")
@@ -347,7 +363,7 @@ def ats_webhook():
         "close_price":  5278.75     // close of the bar that caused the color change
     }
     """
-    global _current_signal_id
+    global _current_signal_id, _last_known_price
 
     # Get raw body for error logging
     raw_body = request.get_data(as_text=True)
@@ -369,6 +385,14 @@ def ats_webhook():
     bar_time     = data.get("bar_time", "")
     close_price  = data.get("close_price")
 
+    # Store close_price as last known price for fallback price feed
+    if close_price:
+        try:
+            _last_known_price = float(close_price)
+            logger.info(f"Updated last_known_price from webhook: {_last_known_price}")
+        except (ValueError, TypeError):
+            pass
+
     # ATR is optional - default to 10.0 if missing or invalid
     atr_raw = data.get("atr")
     try:
@@ -379,8 +403,22 @@ def ats_webhook():
 
     logger.info(
         f"ATS webhook received: {color.upper()} | {direction.upper()} | "
-        f"H:{trigger_high} L:{trigger_low} ATR:{atr}"
+        f"H:{trigger_high} L:{trigger_low} ATR:{atr} close:{close_price}"
     )
+
+    # ── Check if this webhook's close_price confirms a PENDING signal ──
+    # (next bar confirmation: new bar's close crosses the previous signal's trigger)
+    if bar_monitor and bar_monitor.has_pending() and close_price:
+        try:
+            close_price_f = float(close_price)
+            # Feed the close price to the bar monitor - it will check if entry is confirmed
+            bar_monitor.on_tick(close_price_f)
+            # If the signal was just confirmed, the bar_monitor will have cleared it
+            if not bar_monitor.has_pending():
+                logger.info("Entry confirmed by webhook close_price crossing trigger level")
+                return jsonify({"status": "entry_confirmed_by_close", "price": close_price_f}), 200
+        except (ValueError, TypeError):
+            pass
 
     # ── If ATS reversed against open trade, notify position monitor ──
     if position_monitor and position_monitor.has_open_trade():
@@ -461,6 +499,41 @@ def status():
         "next_event": str(news_calendar.next_event()) if news_calendar else None,
         "news_calendar": news_calendar.status() if news_calendar else {},
     })
+
+
+@app.route("/price-override", methods=["POST"])
+@limiter.limit("120 per minute")
+def price_override():
+    """
+    TradingView can call this to update the current price.
+    Expected JSON: {"secret": "...", "current_price": 5284.50}
+    Or use close_price field: {"secret": "...", "close_price": 5284.50}
+    """
+    global _last_known_price
+
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    if data.get("secret") != WEBHOOK_SECRET:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    # Accept either current_price or close_price
+    price = data.get("current_price") or data.get("close_price")
+    if not price:
+        return jsonify({"error": "Missing current_price or close_price"}), 400
+
+    try:
+        price_f = float(price)
+        _last_known_price = price_f
+        logger.debug(f"Price override: {price_f}")
+
+        # Feed to monitors
+        _on_tick(price_f)
+
+        return jsonify({"status": "ok", "price": price_f}), 200
+    except (ValueError, TypeError):
+        return jsonify({"error": "Invalid price value"}), 400
 
 
 @app.route("/flatten", methods=["POST"])
