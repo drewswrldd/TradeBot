@@ -117,6 +117,49 @@ _last_known_price = 0.0
 # Latest ATR value from TradingView /atr-update endpoint
 _latest_atr = 0.0
 
+# Price history for ATR estimation (last 14 closes)
+_price_history = []
+_ATR_PERIOD = 14
+_DEFAULT_ATR = 15.0  # Default ATR for MES 1H if no data available
+
+
+def _estimate_atr() -> float:
+    """
+    Estimate ATR from recent price history using simplified True Range.
+    For 1H bars, we approximate TR as the range between consecutive closes.
+    """
+    if len(_price_history) < 2:
+        return _DEFAULT_ATR
+
+    # Calculate average of absolute price changes (simplified ATR)
+    true_ranges = []
+    for i in range(1, len(_price_history)):
+        tr = abs(_price_history[i] - _price_history[i - 1])
+        true_ranges.append(tr)
+
+    if not true_ranges:
+        return _DEFAULT_ATR
+
+    # Use simple moving average of true ranges
+    avg_tr = sum(true_ranges) / len(true_ranges)
+
+    # MES typically has ATR around 10-20 on 1H, so sanity check
+    if avg_tr < 2.0:
+        avg_tr = _DEFAULT_ATR
+    elif avg_tr > 50.0:
+        avg_tr = _DEFAULT_ATR
+
+    return round(avg_tr, 2)
+
+
+def _add_price_to_history(price: float):
+    """Add a price to the history buffer for ATR estimation."""
+    global _price_history
+    _price_history.append(price)
+    # Keep only last ATR_PERIOD + 1 prices
+    if len(_price_history) > _ATR_PERIOD + 1:
+        _price_history = _price_history[-(_ATR_PERIOD + 1):]
+
 
 def _price_polling_loop():
     """
@@ -544,39 +587,77 @@ def price_override():
 @limiter.limit("120 per minute")
 def atr_update():
     """
-    TradingView sends ATR(14) value here every bar close.
-    Expected JSON: {"secret": "atsbot2026", "atr": 14.5, "price": 5284.50}
+    TradingView sends price here every bar close. ATR is estimated from price history.
+    Expected JSON: {"secret": "atsbot2026", "price": 5284.50}
+    Also accepts atr field if TradingView can provide it.
     """
     global _latest_atr, _last_known_price
 
-    data = request.get_json(silent=True)
-    if not data:
-        return jsonify({"error": "Invalid JSON"}), 400
+    raw_body = request.get_data(as_text=True)
 
-    if data.get("secret") != WEBHOOK_SECRET:
+    # Try to parse JSON, but handle invalid JSON gracefully
+    data = request.get_json(silent=True)
+
+    # If JSON parsing failed, try to extract values via regex
+    price = None
+    atr = None
+    secret = None
+
+    if data:
+        secret = data.get("secret")
+        price = data.get("price")
+        atr = data.get("atr")
+    else:
+        # Extract values from malformed JSON using regex
+        import re
+        secret_match = re.search(r'"secret"\s*:\s*"([^"]+)"', raw_body)
+        price_match = re.search(r'"price"\s*:\s*([\d.]+)', raw_body)
+        atr_match = re.search(r'"atr"\s*:\s*([\d.]+)', raw_body)
+
+        if secret_match:
+            secret = secret_match.group(1)
+        if price_match:
+            price = price_match.group(1)
+        if atr_match:
+            atr = atr_match.group(1)
+
+    # Verify secret
+    if secret != WEBHOOK_SECRET:
+        logger.warning(f"ATR update unauthorized. Raw body: {raw_body[:200]}")
         return jsonify({"error": "Unauthorized"}), 401
 
-    atr = data.get("atr")
-    price = data.get("price")
-
-    if not atr:
-        return jsonify({"error": "Missing atr"}), 400
-
-    try:
-        atr_f = float(atr)
-        _latest_atr = atr_f
-        set_global_atr(atr_f)  # Update the global ATR in risk.py
-        logger.info(f"ATR update received: {atr_f}")
-
-        # Also update price if provided
-        if price:
+    # Process price
+    price_f = None
+    if price:
+        try:
             price_f = float(price)
             _last_known_price = price_f
+            _add_price_to_history(price_f)
             _on_tick(price_f)
+        except (ValueError, TypeError):
+            pass
 
-        return jsonify({"status": "ok", "atr": atr_f, "price": price}), 200
-    except (ValueError, TypeError):
-        return jsonify({"error": "Invalid atr or price value"}), 400
+    # Process ATR - use provided value or estimate from price history
+    atr_f = None
+    atr_source = "provided"
+
+    if atr:
+        try:
+            atr_f = float(atr)
+        except (ValueError, TypeError):
+            pass
+
+    if not atr_f or atr_f <= 0:
+        atr_f = _estimate_atr()
+        atr_source = "estimated"
+
+    # Update global ATR
+    _latest_atr = atr_f
+    set_global_atr(atr_f)
+
+    logger.info(f"ATR update received: price={price_f} atr={atr_f} ({atr_source})")
+
+    return jsonify({"status": "ok", "atr": atr_f, "price": price_f, "source": atr_source}), 200
 
 
 @app.route("/flatten", methods=["POST"])
