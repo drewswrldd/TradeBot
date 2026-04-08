@@ -10,6 +10,22 @@ from config import ACCOUNT_SIZE, RISK_PERCENT, MAX_CONTRACTS, MES_TICK_SIZE, MES
 
 logger = logging.getLogger(__name__)
 
+# Global ATR value updated by /atr-update endpoint
+# Used as the authoritative ATR for position sizing when available
+_global_atr = 0.0
+
+
+def set_global_atr(atr: float):
+    """Set the global ATR value from the /atr-update endpoint."""
+    global _global_atr
+    _global_atr = atr
+    logger.debug(f"Global ATR set to: {atr}")
+
+
+def get_global_atr() -> float:
+    """Get the current global ATR value."""
+    return _global_atr
+
 
 def calculate_position_size(entry_price: float,
                              stop_price:  float,
@@ -89,16 +105,23 @@ def calculate_atr_stop(entry_price: float, atr: float, direction: str,
     """
     Calculate stop price based on ATR.
 
+    Uses the global ATR from /atr-update endpoint if available,
+    otherwise falls back to the provided atr parameter, then to 10.0.
+
     Args:
         entry_price: The entry price
-        atr: Average True Range value
+        atr: Average True Range value (fallback if global ATR not set)
         direction: 'long' or 'short'
         multiplier: ATR multiplier (default 1.5)
 
     Returns:
         Stop price rounded to nearest MES tick (0.25)
     """
-    stop_distance = atr * multiplier
+    # Use global ATR if available, otherwise fallback to provided atr, then 10.0
+    effective_atr = _global_atr if _global_atr > 0 else (atr if atr > 0 else 10.0)
+    atr_source = "global" if _global_atr > 0 else ("signal" if atr > 0 else "default")
+
+    stop_distance = effective_atr * multiplier
 
     if direction == "long":
         stop_price = entry_price - stop_distance
@@ -109,7 +132,7 @@ def calculate_atr_stop(entry_price: float, atr: float, direction: str,
 
     logger.info(
         f"ATR stop calculated: {direction.upper()} | "
-        f"Entry: {entry_price} | ATR: {atr} | "
+        f"Entry: {entry_price} | ATR: {effective_atr} ({atr_source}) | "
         f"Stop distance: {stop_distance:.2f} ({multiplier}x ATR) | "
         f"Stop: {stop_price}"
     )

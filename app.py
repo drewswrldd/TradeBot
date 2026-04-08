@@ -25,7 +25,7 @@ from config import (
 from ninjatrader.bridge_client import NinjaTraderBridgeClient
 from rules.mffu_rules import MFFURulesEngine
 from rules.news_calendar import NewsCalendar
-from rules.risk import calculate_position_size, round_to_tick
+from rules.risk import calculate_position_size, round_to_tick, set_global_atr
 from monitor.bar_monitor import BarConfirmationMonitor, PendingSignal
 from monitor.position_monitor import PositionMonitor, OpenTrade
 from agent.agent import ATSAgent
@@ -113,6 +113,9 @@ _current_signal_id = None
 
 # Last known price from TradingView webhooks (fallback when NinjaTrader price unavailable)
 _last_known_price = 0.0
+
+# Latest ATR value from TradingView /atr-update endpoint
+_latest_atr = 0.0
 
 
 def _price_polling_loop():
@@ -302,8 +305,9 @@ def log_trade_opened(direction: str, entry_price: float, stop_price: float,
     )
 
     # Store trade_id in position_monitor for later closure logging
-    if position_monitor and position_monitor.trade:
-        position_monitor.trade.db_trade_id = trade_id
+    trade = position_monitor.get_trade() if position_monitor else None
+    if trade:
+        trade.db_trade_id = trade_id
 
 
 # ── Exit callbacks ─────────────────────────────────────────
@@ -534,6 +538,45 @@ def price_override():
         return jsonify({"status": "ok", "price": price_f}), 200
     except (ValueError, TypeError):
         return jsonify({"error": "Invalid price value"}), 400
+
+
+@app.route("/atr-update", methods=["POST"])
+@limiter.limit("120 per minute")
+def atr_update():
+    """
+    TradingView sends ATR(14) value here every bar close.
+    Expected JSON: {"secret": "atsbot2026", "atr": 14.5, "price": 5284.50}
+    """
+    global _latest_atr, _last_known_price
+
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    if data.get("secret") != WEBHOOK_SECRET:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    atr = data.get("atr")
+    price = data.get("price")
+
+    if not atr:
+        return jsonify({"error": "Missing atr"}), 400
+
+    try:
+        atr_f = float(atr)
+        _latest_atr = atr_f
+        set_global_atr(atr_f)  # Update the global ATR in risk.py
+        logger.info(f"ATR update received: {atr_f}")
+
+        # Also update price if provided
+        if price:
+            price_f = float(price)
+            _last_known_price = price_f
+            _on_tick(price_f)
+
+        return jsonify({"status": "ok", "atr": atr_f, "price": price}), 200
+    except (ValueError, TypeError):
+        return jsonify({"error": "Invalid atr or price value"}), 400
 
 
 @app.route("/flatten", methods=["POST"])
