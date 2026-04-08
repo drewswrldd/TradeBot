@@ -47,7 +47,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // ── Configuration ───────────────────────────────────────────────────
         private const string LISTEN_PREFIX = "http://localhost:8080/";
         private const string TARGET_ACCOUNT = "MFFUEVFLX574013001";
-        private const string MES_INSTRUMENT = "MES 06-25";  // Current front-month MES contract
+        private const string MES_INSTRUMENT = "MES 03-26";  // Current front-month MES contract
 
         // ── State ───────────────────────────────────────────────────────────
         private HttpListener _listener;

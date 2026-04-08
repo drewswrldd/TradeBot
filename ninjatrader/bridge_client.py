@@ -25,12 +25,12 @@ logger = logging.getLogger(__name__)
 NINJATRADER_BRIDGE_URL = os.getenv("NINJATRADER_BRIDGE_URL", "http://localhost:8080")
 
 # Map TradingView/Tradovate symbols to NinjaTrader format
-# MESH5 → MES 06-25 (June 2025)
+# MESH6 → MES 03-26 (March 2026) - current front-month
 SYMBOL_MAP = {
-    "MESH5": "MES 06-25",
-    "MESU5": "MES 09-25",
-    "MESZ5": "MES 12-25",
     "MESH6": "MES 03-26",
+    "MESM6": "MES 06-26",
+    "MESU6": "MES 09-26",
+    "MESZ6": "MES 12-26",
 }
 
 

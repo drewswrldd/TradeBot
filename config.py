@@ -57,7 +57,7 @@ TRAILING_DRAWDOWN_SHUTDOWN = os.getenv("TRAILING_DRAWDOWN_SHUTDOWN", "True").low
 
 # ── Strategy & Instrument ──────────────────────────────────
 STRATEGY   = int(os.getenv("STRATEGY", 1))
-INSTRUMENT = os.getenv("INSTRUMENT", "MESH5")   # update each quarterly roll
+INSTRUMENT = os.getenv("INSTRUMENT", "MESH6")   # update each quarterly roll
 
 # ── MES contract spec ──────────────────────────────────────
 MES_TICK_SIZE  = 0.25   # minimum price movement
